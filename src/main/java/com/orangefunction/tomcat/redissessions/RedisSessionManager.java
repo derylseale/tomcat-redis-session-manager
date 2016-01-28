@@ -1,37 +1,19 @@
 package com.orangefunction.tomcat.redissessions;
 
-import org.apache.catalina.Lifecycle;
-import org.apache.catalina.LifecycleException;
-import org.apache.catalina.LifecycleListener;
-import org.apache.catalina.util.LifecycleSupport;
-import org.apache.catalina.LifecycleState;
-import org.apache.catalina.Loader;
-import org.apache.catalina.Valve;
-import org.apache.catalina.Session;
+import org.apache.catalina.*;
 import org.apache.catalina.session.ManagerBase;
-
-import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
-import org.apache.commons.pool2.impl.BaseObjectPoolConfig;
-
-import redis.clients.util.Pool;
-import redis.clients.jedis.JedisPool;
-import redis.clients.jedis.JedisSentinelPool;
-import redis.clients.jedis.JedisPoolConfig;
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.Protocol;
-
-import java.io.IOException;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Enumeration;
-import java.util.Set;
-import java.util.EnumSet;
-import java.util.HashSet;
-import java.util.Iterator;
-
+import org.apache.catalina.util.LifecycleSupport;
 import org.apache.juli.logging.Log;
 import org.apache.juli.logging.LogFactory;
+import org.apache.tomcat.util.ExceptionUtils;
+import redis.clients.jedis.*;
+import redis.clients.util.Pool;
 
+import javax.servlet.http.HttpSession;
+import javax.servlet.http.HttpSessionActivationListener;
+import javax.servlet.http.HttpSessionEvent;
+import java.io.IOException;
+import java.util.*;
 
 public class RedisSessionManager extends ManagerBase implements Lifecycle {
 
@@ -439,6 +421,25 @@ public class RedisSessionManager extends ManagerBase implements Lifecycle {
         currentSessionSerializationMetadata.set(container.metadata);
         currentSessionIsPersisted.set(true);
         currentSessionId.set(id);
+        session.activate();
+
+        // Notify interested application event listeners
+        Context context = this.getContext();
+        Object listeners[] = context.getApplicationLifecycleListeners();
+        if (listeners != null && listeners.length > 0) {
+          HttpSessionEvent event = new HttpSessionEvent(session);
+          for (Object listener : listeners) {
+            if (listener instanceof HttpSessionActivationListener) {
+              try {
+                ((HttpSessionActivationListener) listener).sessionDidActivate(event);
+              } catch (Throwable t) {
+                ExceptionUtils.handleThrowable(t);
+                this.getContext().getLogger().error(sm.getString("standardSession.attributeEvent"), t);
+              }
+            }
+          }
+        }
+
       } else {
         currentSessionIsPersisted.set(false);
         currentSession.set(null);
@@ -606,6 +607,25 @@ public class RedisSessionManager extends ManagerBase implements Lifecycle {
          ) {
 
         log.trace("Save was determined to be necessary");
+
+        ((RedisSession) session).passivate();
+
+        // Notify interested application event listeners
+        Context context = this.getContext();
+        Object listeners[] = context.getApplicationLifecycleListeners();
+        if (listeners != null && listeners.length > 0) {
+          HttpSessionEvent event = new HttpSessionEvent((HttpSession) session);
+          for (Object listener : listeners) {
+            if (listener instanceof HttpSessionActivationListener) {
+              try {
+                ((HttpSessionActivationListener) listener).sessionWillPassivate(event);
+              } catch (Throwable t) {
+                ExceptionUtils.handleThrowable(t);
+                this.getContext().getLogger().error(sm.getString("standardSession.attributeEvent"), t);
+              }
+            }
+          }
+        }
 
         if (null == sessionAttributesHash) {
           sessionAttributesHash = serializer.attributesHashFrom(redisSession);
